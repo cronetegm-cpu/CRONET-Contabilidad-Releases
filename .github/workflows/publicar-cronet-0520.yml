@@ -1,0 +1,50 @@
+name: Publicar paquete firmado CRONET 0.5.20
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/publicar-cronet-0520.yml']
+permissions:
+  contents: write
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Descargar ZIP firmado del canal interno
+        env:
+          SOURCE_URL: 'https://sdmntpreastus2.oaiusercontent.com/files/00000000-8bbc-81f6-9e29-f441c71b8dd4/raw?se=2026-10-29T18%3A46%3A57Z&sp=r&sv=2026-02-06&sr=b&scid=e65d44ed-3f45-56cb-bef7-299be73b3fc3&skoid=9b9c502c-68d7-438f-bea0-600feb684c90&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2026-10-29T14%3A44%3A52Z&ske=2026-10-30T14%3A44%3A52Z&sks=b&skv=2026-02-06&sig=Ww3aqXUFt0nion8Xy/kyJsPu5h/GUdetNglPFQ/D5JU%3D'
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 --connect-timeout 20 --max-time 420 "$SOURCE_URL" -o release.zip
+          mkdir -p release
+          unzip -q release.zip -d release
+      - name: Validar versión, firma Ed25519 y SHA256 antes de publicar
+        run: |
+          node <<'NODE'
+          const fs=require('fs'), crypto=require('crypto');
+          const doc=JSON.parse(fs.readFileSync('release/update.json','utf8'));
+          const p=doc.payload, file='CRONET-Accounting-Setup-0.5.20.exe';
+          const expected='https://github.com/cronetegm-cpu/CRONET-Contabilidad-Releases/releases/download/v0.5.20/'+file;
+          if(doc.algorithm!=='Ed25519'||p.schema!==1||p.appId!=='com.cronetegm.contabilidad'||p.version!=='0.5.20'||p.file!==file||p.url!==expected)throw Error('Metadatos del manifiesto inválidos');
+          const pub='-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAHAMtZUTM1lrvQ4BrB4B2hl3IUQhjtFI4RPkn8oEoLAs=\n-----END PUBLIC KEY-----\n';
+          if(!crypto.verify(null,Buffer.from(JSON.stringify(p)),pub,Buffer.from(doc.signature,'base64')))throw Error('Firma Ed25519 no válida');
+          const exe=fs.readFileSync('release/'+file),sum=crypto.createHash('sha256').update(exe).digest('hex');
+          if(exe.length!==p.size||sum!==p.sha256)throw Error('Tamaño o SHA256 no coincide');
+          console.log('Paquete 0.5.20 verificado:',exe.length,'bytes; SHA256',sum);
+          NODE
+      - name: Crear notas de versión
+        run: |
+          cat > RELEASE_NOTES.txt <<'NOTES'
+          CRONET Accounting v0.5.20 — versión de demostración para Windows.
+          Incluye Admin como módulo principal; Cerrar todas las pestañas; firmas de representante, contador y auditor con registros CVPCPA; grado de redondeo de estados financieros; BC y Anexo con saldos deudor/acreededor y movimientos; catálogo auxiliar multinivel e importación segura.
+          Conserva la información contable y el esquema SQLite v4. Se recomienda realizar un respaldo de la empresa antes de instalar.
+          NOTES
+      - name: Publicar versión pública con token nativo del repositorio
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view v0.5.20 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then echo 'v0.5.20 ya existe: no se sobrescribe.' >&2; exit 1; fi
+          gh release create v0.5.20 'release/CRONET-Accounting-Setup-0.5.20.exe' 'release/update.json' --repo "$GITHUB_REPOSITORY" --title 'CRONET Accounting v0.5.20' --notes-file RELEASE_NOTES.txt --latest --target main
+          gh release view v0.5.20 --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name'
+          echo 'Publicación completada.'
